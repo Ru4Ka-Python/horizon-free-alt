@@ -451,7 +451,35 @@ fn client_id_is_configuration() {
         client_id().as_deref(),
         Some("00000000-1111-2222-3333-444444444444")
     );
+    // The Settings field, under the run-time variable.
+    announce_client_id(Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into()));
+    assert_eq!(
+        client_id().as_deref(),
+        Some("00000000-1111-2222-3333-444444444444")
+    );
     std::env::remove_var("HORIZON_MSA_CLIENT_ID");
+    assert_eq!(
+        client_id().as_deref(),
+        Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    );
+    announce_client_id(None);
+}
+
+#[test]
+fn a_client_id_is_a_guid() {
+    assert_eq!(refuse_client_id(""), None);
+    assert_eq!(
+        refuse_client_id(" 00000000-1111-2222-3333-44444444444F "),
+        None
+    );
+    for bad in [
+        "test-client",
+        "00000000111122223333444444444444",
+        "00000000-1111-2222-3333-44444444444g",
+        "00000000-1111-2222-3333-4444444444445",
+    ] {
+        assert!(refuse_client_id(bad).is_some(), "{bad}");
+    }
 }
 
 #[test]

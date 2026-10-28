@@ -62,6 +62,46 @@ fn the_cli_allows_offline_play_to_reach_preparation() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Microsoft sign-in is optional: a build with no client ID at all still plays offline and gets
+/// to preparing the game, without a word about signing in.
+#[test]
+fn offline_play_needs_no_client_id_either() {
+    let root = home("no-client-id");
+    let out = launcher(&root, &["play"])
+        .env("HORIZON_MSA_CLIENT_ID", "")
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert!(said.contains(NEEDS_PREPARATION), "{said}");
+    assert!(!said.to_lowercase().contains("sign in"), "{said}");
+    assert!(!root.join("game/sessions").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_client_id_setting_takes_only_a_guid() {
+    let root = home("client-id-setting");
+    let set = |value: &str| {
+        launcher(&root, &["settings", "msa-client-id", value])
+            .output()
+            .unwrap()
+    };
+    let out = set("not-a-guid");
+    assert!(!out.status.success(), "{}", text(&out));
+    let out = set("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    assert!(out.status.success(), "{}", text(&out));
+    let settings = std::fs::read_to_string(root.join("launcher/settings.json")).unwrap();
+    assert!(
+        settings.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        "{settings}"
+    );
+    let out = set("default");
+    assert!(out.status.success(), "{}", text(&out));
+    let settings = std::fs::read_to_string(root.join("launcher/settings.json")).unwrap();
+    assert!(!settings.contains("aaaaaaaa"), "{settings}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn the_mcp_server_allows_offline_play_to_reach_preparation() {
     let root = home("mcp");

@@ -231,6 +231,10 @@ struct Launcher {
     /// Settings' Proxy field, the same way (`proxy`).
     proxy_input: String,
     proxy_focused: bool,
+    /// Settings' Microsoft client ID field (`msa_client_id`).
+    client_id_input: line_edit::LineEdit,
+    client_id_focused: bool,
+    client_id_focus: FocusHandle,
     proxy_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
@@ -375,6 +379,13 @@ impl Launcher {
             args_focus: cx.focus_handle(),
             proxy_input: settings.proxy.clone().unwrap_or_default(),
             proxy_focused: false,
+            client_id_input: line_edit::LineEdit::new(
+                settings.msa_client_id.clone().unwrap_or_default(),
+                36,
+                38,
+            ),
+            client_id_focused: false,
+            client_id_focus: cx.focus_handle(),
             proxy_focus: cx.focus_handle(),
             settings,
             links: backend::Links::default(),
@@ -2820,6 +2831,8 @@ impl Launcher {
         let plain = |s: &str| div().child(tr(s).to_string()).into_any_element();
         let (accounts, n) = self.account_rows(cx);
         let (offline, n) = self.offline_rows(n, cx);
+        let n = n + 1;
+        let client_id = self.client_id_row(n, cx);
         let appearance = segments(
             "appearance",
             &[
@@ -2861,6 +2874,7 @@ impl Launcher {
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
                     .child(offline)
+                    .child(client_id)
                     .child(group("Updates", "reload"))
                     .child(index_row(
                         n + 1,
@@ -3164,6 +3178,86 @@ impl Launcher {
         )
     }
 
+    /// Settings' Microsoft client ID row: the player's own Azure app for sign-in
+    /// (docs/microsoft-account.md), kept in `settings.json`. Signing in stays optional.
+    fn client_id_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let focused = self.client_id_focused;
+        let field = div()
+            .id("msa-client-id")
+            .track_focus(&self.client_id_focus)
+            .flex()
+            .items_center()
+            .w(px(300.))
+            .h(px(30.))
+            .px(px(12.))
+            .overflow_hidden()
+            .border_2()
+            .border_color(if focused { t.accent } else { t.outline })
+            .bg(t.well)
+            .font_family(theme::MONO)
+            .text_size(px(12.))
+            .cursor_text()
+            .child(line_edit::content(
+                &self.client_id_input,
+                &t,
+                focused,
+                false,
+                false,
+                "00000000-1111-2222-3333-444444444444",
+            ))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.client_id_focus);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.client_id_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited | line_edit::Key::Paste | line_edit::Key::Cut(_) => {
+                        this.save_client_id()
+                    }
+                    _ => {}
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.client_id_input);
+        // A half-typed ID is no reason to complain; one left behind is.
+        let detail = match (
+            focused,
+            account::refuse_client_id(self.client_id_input.text()),
+        ) {
+            (false, Some(why)) => div().text_color(t.danger).child(why).into_any_element(),
+            _ => div()
+                .child(tr(
+                    "The Application (client) ID of your Azure app, approved by Mojang \
+                     (docs/microsoft-account.md). Signing in stays optional: the game and its \
+                     preparation never need it.",
+                ))
+                .into_any_element(),
+        };
+        index_row(
+            n,
+            tr("Microsoft client ID"),
+            Some(detail),
+            Some(field.into_any_element()),
+            &t,
+        )
+    }
+
+    /// Keeps the client ID field in `settings.json` when it reads as one (or is empty), and tells
+    /// `account::client_id`.
+    fn save_client_id(&mut self) {
+        let value = self.client_id_input.text().trim().to_owned();
+        if account::refuse_client_id(&value).is_some() {
+            return;
+        }
+        self.settings.msa_client_id = (!value.is_empty()).then_some(value);
+        self.settings.save();
+        account::announce_client_id(self.settings.msa_client_id.clone());
+    }
+
     /// Settings' Proxy row: the HTTP proxy every download and sign-in goes through, kept in
     /// `settings.json` and read back by `proxy.rs` on each request.
     fn proxy_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
@@ -3353,8 +3447,8 @@ impl Launcher {
                 .child(div().child(account::NO_KEYCHAIN))
         };
         let action = if !configured {
-            // No client ID in this build: the button says what's coming and does nothing.
-            Some(button("sign-in", "Coming soon", Kind::Ghost, &t).into_any_element())
+            // No client ID yet: the row below takes one.
+            None
         } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
             let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
             Some(
@@ -3402,9 +3496,7 @@ impl Launcher {
             )
         };
         n += 1;
-        let title = if !configured {
-            "Microsoft account (coming soon)"
-        } else if self.accounts.accounts.is_empty() {
+        let title = if self.accounts.accounts.is_empty() {
             "Microsoft account"
         } else {
             "Another account"
@@ -3912,6 +4004,7 @@ impl Render for Launcher {
         self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
         self.proxy_focused = self.proxy_focus.is_focused(window);
+        self.client_id_focused = self.client_id_focus.is_focused(window);
         let size = window.viewport_size();
         let banner_width = f32::from(size.width) - theme::SIDEBAR - scrollbar::GUTTER;
         let content = match self.page {

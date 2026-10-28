@@ -6,9 +6,10 @@ they are. This note is the design, the status of each part and what Ludovic has 
 
 ## What Ludovic registers (needs his accounts)
 
-Nothing below can be done by an agent: the app registrations belong to Ludovic. Until the client ID
-is set, the launcher's sign-in shows "Coming soon" ("Microsoft sign-in is coming soon") and everything else
-works as before.
+Nothing below can be done by an agent: the app registrations belong to whoever runs the build. Until a
+client ID is set, Settings says sign-in needs one and everything else works as before: in this fork
+signing in is always optional, and playing or preparing the game from the player's own install never
+asks for an account.
 
 1. **Azure app registration** (https://portal.azure.com → Microsoft Entra ID → App registrations →
    New registration):
@@ -33,8 +34,10 @@ works as before.
 3. **Where the ID goes**:
    - Release builds: the GitHub repository variable (not a secret: client IDs are public)
      `HORIZON_MSA_CLIENT_ID`; the launcher's build reads it with `option_env!` at compile time.
-   - Any build, at run time: the environment variable `HORIZON_MSA_CLIENT_ID` overrides the built-in
-     value (empty or unset = not configured).
+   - Any build, in the launcher: Settings → Account → Microsoft client ID, or
+     `horizon-launcher settings msa-client-id <GUID>` (kept as `msa_client_id` in `settings.json`).
+   - Any build, at run time: the environment variable `HORIZON_MSA_CLIENT_ID` overrides both
+     (empty or unset = not configured).
 
 Never use another application's client ID (the official launcher's or another launcher's).
 

@@ -816,8 +816,7 @@ impl Launcher {
                 this.mods_search(0);
                 cx.notify();
             }));
-        // CurseForge support is coming soon: shown, inert, never searched (like the Microsoft
-        // account's "Coming soon").
+        // CurseForge support is coming soon: shown, inert, never searched.
         let source_note = (self.mods.kind != PackKind::DataPack)
             .then(|| div().flex().child(self.mods_source_switch(cx)));
         // The registry lists only what was made for Horizon: no "everything", no Modrinth filters.
@@ -1292,7 +1291,7 @@ impl Launcher {
 
 impl Launcher {
     /// The source switch: Modrinth or Horizon's registry, CurseForge shown as coming soon and not
-    /// clickable, like the Microsoft account's "Coming soon".
+    /// clickable.
     fn mods_source_switch(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let this = cx.entity().downgrade();
         source_switch(&self.theme, self.mods.source, move |source, _, cx| {

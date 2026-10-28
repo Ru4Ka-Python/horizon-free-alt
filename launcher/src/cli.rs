@@ -636,6 +636,7 @@ enum Cmd {
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
     /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
+    /// msa-client-id GUID (your Azure app for Microsoft sign-in; "default" removes it),
     /// while-playing stay|minimize|hide (what the window does while the game runs), language
     /// system|en|fr|ru (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
@@ -782,13 +783,14 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 10] = [
+const SETTING_KEYS: [&str; 11] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
     "opening-animation",
     "proxy",
+    "msa-client-id",
     "while-playing",
     "language",
     "accent",
@@ -850,6 +852,15 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
                 s.proxy = Some(value.trim().to_string());
             }
         }
+        "msa-client-id" => {
+            if value == "default" || value.trim().is_empty() {
+                s.msa_client_id = None;
+            } else if let Some(why) = horizon_launcher::account::refuse_client_id(value) {
+                return Err(why);
+            } else {
+                s.msa_client_id = Some(value.trim().to_string());
+            }
+        }
         _ => return Err(format!("No setting {key}.")),
     }
     Ok(())
@@ -865,6 +876,7 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "opening_animation": !s.skip_opening,
         "game_args": s.game_args,
         "proxy": s.proxy,
+        "msa_client_id": s.msa_client_id,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
         "while_playing": s.while_playing.name(),
         "language": s.language.map_or("system", |l| l.code()),

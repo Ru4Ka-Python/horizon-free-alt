@@ -2643,6 +2643,10 @@ pub struct Settings {
     /// Unset means none: the environment's `HTTPS_PROXY` and `HTTP_PROXY` apply instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
+    /// The Azure app's client ID Microsoft sign-in uses (`account::client_id`), such as
+    /// `00000000-1111-2222-3333-444444444444`. Signing in stays optional.
+    #[serde(default)]
+    pub msa_client_id: Option<String>,
     /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
     pub appearance: Appearance,

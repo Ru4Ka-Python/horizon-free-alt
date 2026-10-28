@@ -160,9 +160,6 @@
   "Download and prepare": "Télécharger et préparer",
   "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.": "Pas préparé. Horizon peut télécharger Minecraft {version} depuis Mojang pour votre compte, ou utiliser votre propre installation.",
   "Cancel": "Annuler",
-  "Coming soon": "Bientôt",
-  "Microsoft account (coming soon)": "Compte Microsoft (bientôt)",
-  "Microsoft sign-in is coming soon. Until then the game plays offline: single player, LAN and servers in offline mode work.": "La connexion Microsoft arrive bientôt. D'ici là, le jeu se joue hors ligne : solo, LAN et serveurs en mode hors ligne fonctionnent.",
   "Native mods (experimental)": "Mods natifs (expérimental)",
   "Native mods from the Mods page compile into the game with the launcher's own Rust. Not sandboxed: they can do anything you can on this computer.": "Les mods natifs de la page Mods sont compilés dans le jeu avec le Rust du launcher. Sans bac à sable : ils peuvent faire tout ce que vous pouvez faire sur cet ordinateur.",
   "{version} plays in this instance.": "Cette instance joue {version}.",
@@ -171,5 +168,8 @@
   "These mods will run with full access to your computer": "Ces mods auront un accès complet à votre ordinateur",
   "They can read, change or delete your files, and use your accounts and network, like any program you run. Build them only if you trust their authors: the Mods page names them.": "Ils peuvent lire, modifier ou supprimer vos fichiers, et utiliser vos comptes et votre réseau, comme tout programme que vous lancez. Ne les compilez que si vous faites confiance à leurs auteurs : la page Mods les nomme.",
   "Mods: {mods}": "Mods : {mods}",
-  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilation construit le jeu : une dizaine de minutes et quelques Go de disque la première fois, quelques minutes ensuite."
+  "The build compiles the game: about ten minutes and a few GB of disk the first time, a few minutes after that.": "La compilation construit le jeu : une dizaine de minutes et quelques Go de disque la première fois, quelques minutes ensuite.",
+  "Microsoft sign-in needs your Azure app's client ID: enter it below. Until then the game plays offline: single player, LAN and servers in offline mode work.": "La connexion Microsoft a besoin du client ID de votre application Azure : saisissez-le ci-dessous. D'ici là, le jeu se joue hors ligne : solo, LAN et serveurs en mode hors ligne fonctionnent.",
+  "Microsoft client ID": "Client ID Microsoft",
+  "The Application (client) ID of your Azure app, approved by Mojang (docs/microsoft-account.md). Signing in stays optional: the game and its preparation never need it.": "L'Application (client) ID de votre application Azure, approuvée par Mojang (docs/microsoft-account.md). La connexion reste facultative : le jeu et sa préparation n'en ont jamais besoin."
 }

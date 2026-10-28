@@ -4,8 +4,12 @@
 //! keeps only names and UUIDs. The game gets the session in a file it reads once
 //! (`--session-file`), never on its command line. Tokens never reach logs, errors or output.
 //!
-//! The Azure app (client ID) is Horizon's own and is configuration: `HORIZON_MSA_CLIENT_ID` at
-//! build time, or at run time to override it. Without one, sign-in says it is not configured.
+//! The Azure app (client ID) is configuration: `HORIZON_MSA_CLIENT_ID` at build time, the
+//! Settings page's field (`msa_client_id` in `settings.json`), or `HORIZON_MSA_CLIENT_ID` at run
+//! time to override both. Without one, sign-in says it is not configured.
+//!
+//! Signing in is optional: playing, offline names and preparing the game from the player's own
+//! install never ask for an account. Only downloading Minecraft from Mojang does (sources.rs).
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,20 +20,53 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const SERVICE: &str = "dev.playhorizon.launcher";
 const SCOPE: &str = "XboxLive.signin offline_access";
 pub const NOT_CONFIGURED: &str =
-    "Microsoft sign-in is coming soon. Until then the game plays offline: single player, \
-     LAN and servers in offline mode work.";
+    "Microsoft sign-in needs your Azure app's client ID: enter it below. Until then the game \
+     plays offline: single player, LAN and servers in offline mode work.";
 const SIGN_IN_AGAIN: &str = "Your Microsoft sign-in expired. Sign in again.";
 /// The Minecraft token is renewed when it has less than this left.
 const RENEW_BEFORE: u64 = 3600;
 
-/// The configured Azure app, if any: the run-time variable wins over the build-time one, and an
-/// empty value means none.
+/// The configured Azure app, if any: the run-time variable wins over the Settings field, which
+/// wins over the build-time one, and an empty value means none.
 pub fn client_id() -> Option<String> {
     std::env::var("HORIZON_MSA_CLIENT_ID")
         .ok()
+        .or_else(client_id_setting)
         .or_else(|| option_env!("HORIZON_MSA_CLIENT_ID").map(str::to_owned))
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty())
+}
+
+/// The Settings field, as `announce_client_id` last set it, or None before: drawing Settings asks
+/// for the client ID every frame, which shouldn't read `settings.json` each time.
+static CLIENT_ID_SETTING: Mutex<Option<Option<String>>> = Mutex::new(None);
+
+fn client_id_setting() -> Option<String> {
+    let mut set = CLIENT_ID_SETTING.lock().unwrap_or_else(|e| e.into_inner());
+    set.get_or_insert_with(|| crate::backend::Settings::load().msa_client_id)
+        .clone()
+}
+
+/// Tells `client_id` the Settings field changed.
+pub fn announce_client_id(id: Option<String>) {
+    *CLIENT_ID_SETTING.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
+}
+
+/// Why `id` can't be a client ID, or None when it can (empty means none): Azure shows the
+/// Application (client) ID as a GUID.
+pub fn refuse_client_id(id: &str) -> Option<String> {
+    let id = id.trim();
+    let guid = id.len() == 36
+        && id.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        });
+    (!id.is_empty() && !guid).then(|| {
+        format!(
+            "{id} isn't a client ID. Azure shows it as a GUID, such as \
+             00000000-1111-2222-3333-444444444444."
+        )
+    })
 }
 
 /// Where the requests go: the real services, or a mock in tests.

@@ -20,6 +20,16 @@ When you merge or cherry-pick upstream commits:
   must find no ad. Not ads, and kept: mobs' breeding "partner" in the game, the CI "hosting partner" in
   `docs/release-flow.md`, and the Horizon author's GitHub Sponsors link (`sponsor` in
   `launcher/links.json`, `Links` in `launcher/src/backend.rs`).
+- **Microsoft sign-in stays optional. Never bring back the owner gate.** Playing, offline names and
+  preparing the game from the player's own install (any launcher's folder, FreeSM included) must never
+  need a Microsoft account, a sign-in or a client ID. Upstream's gate was `launcher/src/owner_page.rs`,
+  `launcher/tests/owner_gate.rs`, `account::launch` / `NoOwner` / `NEEDS_OWNER` / `has_owner`,
+  `OFFLINE_NEEDS_OWNER`, the `owns` secret and the "Sign in … first" prepare row: if upstream re-adds
+  or extends any of it, take ours. Upstream's sign-in itself (device code, tokens, skins, online-mode
+  servers) is welcome. Only downloading Minecraft from Mojang checks that the signed-in account owns
+  the game (`download_for_owner` in `launcher/src/backend.rs`); keep that check. The client ID comes
+  from `HORIZON_MSA_CLIENT_ID` or Settings (`msa_client_id`). `launcher/tests/offline_play.rs` must
+  pass after every merge.
 
 ## Rules that bite
 
