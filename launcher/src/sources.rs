@@ -111,6 +111,8 @@ pub fn known_folders(os: Os, f: &Folders) -> Vec<(&'static str, PathBuf)> {
                 "Prism Launcher",
                 flatpak("org.prismlauncher.PrismLauncher", "data/PrismLauncher"),
             ),
+            // A fork of Prism Launcher with the same folder layout.
+            ("Freesm Launcher", f.data.join("FreesmLauncher")),
             ("MultiMC", f.data.join("multimc")),
             ("Modrinth App", f.data.join("ModrinthApp")),
             (
@@ -126,6 +128,7 @@ pub fn known_folders(os: Os, f: &Folders) -> Vec<(&'static str, PathBuf)> {
         Os::MacOs => vec![
             (OFFICIAL, f.data.join("minecraft")),
             ("Prism Launcher", f.data.join("PrismLauncher")),
+            ("Freesm Launcher", f.data.join("FreesmLauncher")),
             ("MultiMC", f.data.join("MultiMC")),
             ("Modrinth App", f.data.join("ModrinthApp")),
             ("ATLauncher", f.data.join("ATLauncher")),
@@ -133,6 +136,7 @@ pub fn known_folders(os: Os, f: &Folders) -> Vec<(&'static str, PathBuf)> {
         Os::Windows => vec![
             (OFFICIAL, f.data.join(".minecraft")),
             ("Prism Launcher", f.data.join("PrismLauncher")),
+            ("Freesm Launcher", f.data.join("FreesmLauncher")),
             ("Modrinth App", f.data.join("ModrinthApp")),
             ("ATLauncher", f.data.join("ATLauncher")),
         ],
@@ -244,6 +248,7 @@ fn launcher_of(path: &Path) -> Option<&'static str> {
         .filter_map(|name| name.to_str())
         .find_map(|name| match name {
             "PrismLauncher" => Some("Prism Launcher"),
+            "FreesmLauncher" => Some("Freesm Launcher"),
             "multimc" | "MultiMC" => Some("MultiMC"),
             "ModrinthApp" | "com.modrinth.theseus" => Some("the Modrinth App"),
             "atlauncher" | "ATLauncher" => Some("ATLauncher"),

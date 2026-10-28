@@ -515,6 +515,7 @@ fn each_system_has_its_launcher_folders() {
         "the official launcher: /home/r/.minecraft",
         "Prism Launcher: /home/r/.local/share/PrismLauncher",
         "Prism Launcher: /home/r/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher",
+        "Freesm Launcher: /home/r/.local/share/FreesmLauncher",
         "MultiMC: /home/r/.local/share/multimc",
         "Modrinth App: /home/r/.local/share/ModrinthApp",
         "Modrinth App: /home/r/.var/app/com.modrinth.ModrinthApp/data/ModrinthApp",
