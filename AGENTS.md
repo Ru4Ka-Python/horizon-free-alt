@@ -4,6 +4,23 @@ Minecraft: Java Edition 26.3 rewritten in Rust (wgpu). Vanilla is the specificat
 feature. Read [CONTRIBUTING.md](CONTRIBUTING.md) once; this page tells you where things are.
 Feature → files → harness for the most-changed areas: [docs/architecture.md](docs/architecture.md).
 
+## This fork: merging from upstream
+
+This repository is a fork of horizon-rust/horizon (remote `upstream`, push disabled; ours is `origin`).
+When you merge or cherry-pick upstream commits:
+
+- **Never bring back partner or sponsor ads.** The fork removed Sculk's ads from the launcher:
+  `launcher/src/partner.rs`, `launcher/assets/sculk-*.webp`, the Servers page banner, the sidebar card,
+  the `partner_seen_secs` / `partner_hidden` settings, their strings in `launcher/lang/*.json` (`PARTNER`,
+  `HIDE`, `24/7 online`, `Your Minecraft server, {online}.`, `15% off`, `Get my server`,
+  `Ready in under a minute`) and the "Partner banner" note in `docs/design-system.md`. If upstream
+  changes, re-adds or adds to any of these, or adds another partner, sponsor, referral link or promo
+  code, drop that part of the merge (take ours, delete re-added files) and keep the rest.
+- After the merge, `git grep -in 'partner\|sponsor\|sculkhosting\|promo' -- launcher docs/design-system.md`
+  must find no ad. Not ads, and kept: mobs' breeding "partner" in the game, the CI "hosting partner" in
+  `docs/release-flow.md`, and the Horizon author's GitHub Sponsors link (`sponsor` in
+  `launcher/links.json`, `Links` in `launcher/src/backend.rs`).
+
 ## Rules that bite
 
 - **Never commit Mojang's files**: game jars, assets, decompiled source, prepared resources (`.local/`).
