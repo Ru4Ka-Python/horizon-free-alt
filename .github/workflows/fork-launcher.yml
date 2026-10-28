@@ -1,0 +1,86 @@
+name: fork launcher
+# This fork's own launcher builds, for Linux and Windows: each run leaves two archives in its
+# artifacts and publishes nothing. Upstream's workflows (launcher.yml, release.yml, nightly, parity)
+# need Horizon's runners and keys, so they are disabled on this fork's Actions page; this one runs on
+# GitHub-hosted runners only. Linux builds on Ubuntu 22.04, as upstream's release does, so the
+# launcher runs on older glibc too.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - launcher/**
+      # The launcher builds horizon-core, -prepare, -world, -mods and other crates of the game.
+      - crates/**
+      - Cargo.lock
+      - .github/workflows/fork-launcher.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-launcher-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            asset: horizon-launcher-linux-x86_64
+            binary: horizon-launcher
+          - name: windows
+            os: windows-latest
+            asset: horizon-launcher-windows-x64
+            binary: horizon-launcher.exe
+            # The C runtime linked in: without it the launcher asks for VCRUNTIME140.dll,
+            # which only the Visual C++ redistributable installs.
+            rustflags: -C target-feature=+crt-static
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        working-directory: launcher
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher
+          shared-key: fork-launcher-${{ matrix.name }}
+      - name: Linux libraries GPUI links to
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev
+      - run: cargo build --release --locked
+      - name: It starts
+        env:
+          HORIZON_LAUNCHER_NO_SELF_UPDATE: '1'
+          HORIZON_NO_KEYCHAIN: '1'
+          HORIZON_TELEMETRY_URL: 'off'
+        run: |
+          export HORIZON_LAUNCHER_HOME="${RUNNER_TEMP//\\//}/launcher-smoke"
+          export HORIZON_HOME="$HORIZON_LAUNCHER_HOME/game"
+          target/release/${{ matrix.binary }} --version
+          target/release/${{ matrix.binary }} links --json
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.binary }} dist/
+          cp ../LICENSE dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: launcher/dist/
+          if-no-files-found: error
