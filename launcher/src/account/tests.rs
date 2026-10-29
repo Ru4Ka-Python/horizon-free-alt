@@ -15,6 +15,8 @@ struct Mock {
     xerr: Option<u64>,
     owns_game: bool,
     no_profile: bool,
+    /// What `launcher/login` answers instead of a token (an older service, an outage).
+    launcher_login_refused: Option<u16>,
     /// Every request: method, path and body.
     log: Vec<(String, String, String)>,
 }
@@ -80,6 +82,21 @@ fn route(mock: &mut Mock, method: &str, path: &str, auth: &str, body: &str) -> (
                 None => reply(
                     200,
                     json!({"Token": "xsts-token", "DisplayClaims": {"xui": [{"uhs": "uhs-1", "xid": "2535400000000000"}]}}),
+                ),
+            }
+        }
+        ("POST", "/mc/launcher/login") => {
+            let v: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(v["xtoken"], "XBL3.0 x=uhs-1;xsts-token");
+            assert_eq!(v["platform"], "PC_LAUNCHER");
+            match mock.launcher_login_refused {
+                Some(status) => reply(
+                    status,
+                    json!({"path": "/launcher/login", "error": "UNAUTHORIZED"}),
+                ),
+                None => reply(
+                    200,
+                    json!({"access_token": "mc-token", "token_type": "Bearer", "expires_in": 86400}),
                 ),
             }
         }
@@ -154,7 +171,11 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
             let body = String::from_utf8(body).unwrap();
             let (status, text) = {
                 let mut m = mock.lock().unwrap();
-                m.log.push((method.clone(), path.clone(), body.clone()));
+                // A bare `GET /` is a local tool probing every new port (T3 Code does, on the Mac
+                // mini), not the launcher: no endpoint here is the root.
+                if (method.as_str(), path.as_str()) != ("GET", "/") {
+                    m.log.push((method.clone(), path.clone(), body.clone()));
+                }
                 route(&mut m, &method, &path, &auth, &body)
             };
             let _ = write!(
@@ -225,7 +246,7 @@ fn the_whole_chain() {
             "/ms/token",
             "/xbl",
             "/xsts",
-            "/mc/authentication/login_with_xbox",
+            "/mc/launcher/login",
             "/mc/entitlements/mcstore",
             "/mc/minecraft/profile"
         ]
@@ -234,28 +255,99 @@ fn the_whole_chain() {
 }
 
 #[test]
-fn refresh_only_when_the_token_runs_out() {
-    let (m, ep) = mock(|_| {});
-    let account = Account {
+fn login_with_xbox_signs_in_when_launcher_login_refuses() {
+    for status in [401, 404, 503] {
+        let (m, ep) = mock(|m| m.launcher_login_refused = Some(status));
+        let ms = MsTokens {
+            access: "ms-access-1".into(),
+            refresh: "r".into(),
+        };
+        let (account, secrets) = finish_sign_in(&ep, ms).unwrap();
+        assert_eq!(account.uuid, UUID);
+        assert_eq!(secrets.minecraft_token, "mc-token");
+        // The same owner check follows, with the token login_with_xbox gave.
+        assert!(secrets.owns);
+        let paths: Vec<String> = m
+            .lock()
+            .unwrap()
+            .log
+            .iter()
+            .map(|(_, p, _)| p.clone())
+            .collect();
+        assert_eq!(
+            paths[2..],
+            [
+                "/mc/launcher/login",
+                "/mc/authentication/login_with_xbox",
+                "/mc/entitlements/mcstore",
+                "/mc/minecraft/profile"
+            ]
+        );
+    }
+    // Either way, an account that doesn't own the game is refused.
+    let (_, ep) = mock(|m| {
+        m.launcher_login_refused = Some(503);
+        m.owns_game = false;
+    });
+    let ms = MsTokens {
+        access: "ms-access-1".into(),
+        refresh: "r".into(),
+    };
+    assert_eq!(finish_sign_in(&ep, ms).unwrap_err(), DOES_NOT_OWN);
+}
+
+fn notch() -> Account {
+    Account {
         uuid: UUID.into(),
         name: "Notch".into(),
         skin: None,
         cape: None,
-    };
-    let good = Secrets {
+    }
+}
+
+/// A signed-in account's secrets: a token good for two hours, and the last ownership answer.
+fn secrets(token: &str, owns: bool) -> Secrets {
+    Secrets {
         refresh_token: "ms-refresh-1".into(),
-        minecraft_token: "old".into(),
+        minecraft_token: token.into(),
         minecraft_expires_at: now() + 7200,
         xuid: None,
+        owns,
+    }
+}
+
+/// Nothing listens there: every request fails as with no network.
+fn offline() -> Endpoints {
+    Endpoints {
+        microsoft: "http://127.0.0.1:9/ms".into(),
+        xbox_user: "http://127.0.0.1:9/xbl".into(),
+        xsts: "http://127.0.0.1:9/xsts".into(),
+        minecraft: "http://127.0.0.1:9/mc".into(),
+    }
+}
+
+#[test]
+fn refresh_only_when_the_token_runs_out() {
+    let (m, ep) = mock(|_| {});
+    let Check::Owns(_, kept) = check(
+        &ep,
+        Some("test-client"),
+        &notch(),
+        secrets("mc-token", true),
+    ) else {
+        panic!("owns");
     };
-    let (_, kept) = fresh(&ep, "test-client", &account, good).unwrap();
-    assert_eq!(kept.minecraft_token, "old");
-    assert!(m.lock().unwrap().log.is_empty());
+    assert_eq!(kept.refresh_token, "ms-refresh-1");
+    // Entitlements and profile only: the token had two hours left.
+    assert_eq!(m.lock().unwrap().log.len(), 2);
     let stale = Secrets {
         minecraft_expires_at: now() + 60,
         ..kept.clone()
     };
-    let (renewed_account, renewed) = fresh(&ep, "test-client", &account, stale).unwrap();
+    let Check::Owns(renewed_account, renewed) = check(&ep, Some("test-client"), &notch(), stale)
+    else {
+        panic!("owns");
+    };
     assert_eq!(
         (
             renewed.refresh_token.as_str(),
@@ -269,25 +361,213 @@ fn refresh_only_when_the_token_runs_out() {
         minecraft_expires_at: 0,
         ..kept
     };
+    assert!(matches!(
+        check(&ep, Some("test-client"), &notch(), revoked),
+        Check::NoAnswer(e, s) if e == SIGN_IN_AGAIN && s.owns
+    ));
+}
+
+/// An accounts.json with Notch signed in and playing, his secrets in `store`.
+fn signed_in(store: &MemoryStore, secrets: &Secrets) -> Accounts {
+    let mut accounts = Accounts::default();
+    accounts.add(store, notch(), secrets).unwrap();
+    accounts
+}
+
+fn kept(store: &MemoryStore) -> Secrets {
+    secrets_in(store, UUID).unwrap()
+}
+
+#[test]
+fn an_owner_plays_with_a_session() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    let (account, session) = pass.session.unwrap();
     assert_eq!(
-        fresh(&ep, "test-client", &account, revoked).unwrap_err(),
-        SIGN_IN_AGAIN
+        (account.name.as_str(), session.minecraft_token.as_str()),
+        ("Notch", "mc-token")
+    );
+    assert!(pass.owner.is_some() && pass.offline.is_none());
+    // The profile as the services have it now (the skin is new).
+    assert!(accounts.selected().unwrap().skin.is_some());
+}
+
+/// A keychain that reads but refuses to keep anything new (#3249).
+struct Refusing(MemoryStore);
+impl SecretStore for Refusing {
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        self.0.get(key)
+    }
+    fn set(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("the keyring is locked".into())
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        self.0.delete(key)
+    }
+    fn persistent(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_renewed_sign_in_the_keychain_refuses_still_plays_and_says_so() {
+    let (_, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let stale = Secrets {
+        minecraft_expires_at: now() + 60,
+        ..secrets("old-token", true)
+    };
+    let mut accounts = signed_in(&store, &stale);
+    let refusing = Refusing(store);
+    let pass = launch(&ep, Some("test-client"), &refusing, &mut accounts).unwrap();
+    assert_eq!(pass.session.unwrap().1.minecraft_token, "mc-token");
+    let said = "Notch's renewed sign-in couldn't be saved in the keychain (the keyring is \
+                locked): you may have to sign in again next time.";
+    assert_eq!(pass.unsaved.as_deref(), Some(said));
+    assert_eq!(take_unsaved().as_deref(), Some(said));
+    assert_eq!(take_unsaved(), None, "said once");
+    // Nothing to save, nothing to say.
+    let mut accounts = signed_in(&refusing.0, &secrets("mc-token", true));
+    let pass = launch(&ep, Some("test-client"), &refusing, &mut accounts).unwrap();
+    assert!(pass.unsaved.is_none());
+}
+
+#[test]
+fn a_no_from_the_services_blocks_at_once() {
+    let (_, ep) = mock(|m| m.owns_game = false);
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    assert!(accounts.has_owner(&store));
+    assert_eq!(
+        launch(&ep, Some("test-client"), &store, &mut accounts).unwrap_err(),
+        NoOwner
+    );
+    // The answer is kept beside the tokens: offline now, it still says no.
+    assert!(!kept(&store).owns && !accounts.has_owner(&store));
+    assert_eq!(
+        launch(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
+        NoOwner
+    );
+    assert_eq!(
+        NoOwner.to_string(),
+        "No account in the launcher owns Minecraft: Java Edition."
     );
 }
 
 #[test]
-fn ownership_is_asked_again_with_the_saved_token() {
-    let secrets = |token: &str| Secrets {
-        refresh_token: "ms-refresh-1".into(),
-        minecraft_token: token.into(),
-        minecraft_expires_at: now() + 7200,
-        xuid: None,
+fn no_network_never_blocks_a_past_owner() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let pass = launch(&offline(), Some("test-client"), &store, &mut accounts).unwrap();
+    // Plays, offline, and says why.
+    assert!(pass.session.is_none() && pass.owner.is_none());
+    assert!(pass.offline.unwrap().contains("Could not reach"));
+    // A token to renew with no network, or a build without sign-in: the same.
+    let stale = Secrets {
+        minecraft_expires_at: 0,
+        ..secrets("mc-token", true)
     };
+    let mut accounts = signed_in(&store, &stale);
+    assert!(launch(&offline(), Some("test-client"), &store, &mut accounts).is_ok());
+    assert!(launch(&offline(), None, &store, &mut accounts).is_ok());
+    // An account that never passed doesn't pass offline.
+    let mut accounts = signed_in(&store, &secrets("mc-token", false));
+    assert!(launch(&offline(), Some("test-client"), &store, &mut accounts).is_err());
+}
+
+#[test]
+fn accounts_from_before_the_gate_owned_the_game_at_sign_in() {
+    let old = r#"{"refresh_token":"r","minecraft_token":"t","minecraft_expires_at":1,"xuid":null}"#;
+    assert!(serde_json::from_str::<Secrets>(old).unwrap().owns);
+}
+
+#[test]
+fn any_owner_opens_the_gate_and_the_one_who_plays_brings_the_session() {
     let (m, ep) = mock(|_| {});
-    assert_eq!(owns_minecraft(&ep, &secrets("mc-token")), Ok(true));
-    assert_eq!(m.lock().unwrap().log.len(), 1);
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    // A second account, no longer in the keychain, plays.
+    accounts.accounts.push(Account {
+        uuid: "other".into(),
+        name: "Alex".into(),
+        skin: None,
+        cape: None,
+    });
+    accounts.selected = Some("other".into());
+    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    assert!(pass.session.is_none());
+    assert!(pass
+        .offline
+        .unwrap()
+        .starts_with("Alex is no longer signed in"));
+    assert_eq!(pass.owner.unwrap().0.name, "Notch");
+    // An offline name plays: Notch is asked, and no session goes to the game.
+    accounts.selected = None;
+    m.lock().unwrap().log.clear();
+    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    assert!(pass.session.is_none() && pass.offline.is_none());
+    assert_eq!(m.lock().unwrap().log.len(), 2);
+    // No account at all.
+    assert!(launch(&ep, Some("test-client"), &store, &mut Accounts::default()).is_err());
+}
+
+/// This fork: offline names play with no account at all, and keep playing when the last owner
+/// signs out. Only what needs an owner (a Mojang download, Mojang's own game) asks [`launch`].
+#[test]
+fn offline_names_need_no_owner() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts
+        .play_as(Player::Offline("Builder_1".into()))
+        .unwrap();
+    assert_eq!(accounts.offline, ["Builder_1"]);
+    assert_eq!(accounts.player(), Player::Offline("Builder_1".into()));
+    assert_eq!(accounts.name_arg(), Some("Builder_1"));
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    accounts
+        .play_as(Player::Offline("Builder_1".into()))
+        .unwrap();
+    // Signing the last owner out keeps the name, which still plays.
+    accounts.remove(&store, UUID).unwrap();
+    assert_eq!(accounts.offline, ["Builder_1"]);
+    assert_eq!(accounts.player(), Player::Offline("Builder_1".into()));
+    assert!(!accounts.has_owner(&store));
+    accounts
+        .play_as(Player::Offline("Builder_2".into()))
+        .unwrap();
+    // The strict check still says there is no owner, for a Mojang download.
+    let (_, ep) = mock(|_| {});
+    assert!(launch(&ep, Some("test-client"), &store, &mut accounts).is_err());
+}
+
+/// Horizon starts without an owner: no request without an account, no session and no owner to
+/// download the game for; beside an account that doesn't own it, the same.
+#[test]
+fn horizon_plays_without_an_owner() {
+    let store = MemoryStore::default();
+    let mut accounts = Accounts::default();
+    accounts
+        .play_as(Player::Offline("Builder_1".into()))
+        .unwrap();
+    let (m, ep) = mock(|_| {});
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts);
+    assert!(pass.session.is_none() && pass.owner.is_none() && pass.offline.is_none());
+    assert!(m.lock().unwrap().log.is_empty());
     let (_, ep) = mock(|m| m.owns_game = false);
-    assert_eq!(owns_minecraft(&ep, &secrets("mc-token")), Ok(false));
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts);
+    assert!(pass.session.is_none() && pass.owner.is_none());
+    assert!(!accounts.has_owner(&store));
+    // No client ID at all: still no refusal.
+    let pass = launch_for_game(&ep, None, &MemoryStore::default(), &mut Accounts::default());
+    assert!(pass.session.is_none() && pass.owner.is_none());
+    // A real owner is still found and brings its session.
+    let (_, ep) = mock(|_| {});
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let pass = launch_for_game(&ep, Some("test-client"), &store, &mut accounts);
+    assert_eq!(pass.owner.unwrap().0.name, "Notch");
 }
 
 #[test]
@@ -305,10 +585,7 @@ fn refusals_have_messages() {
         .unwrap_err()
         .contains("child account"));
     let (_, ep) = mock(|m| m.owns_game = false);
-    assert_eq!(
-        finish_sign_in(&ep, tokens()).unwrap_err(),
-        "This account doesn't own Minecraft: Java Edition."
-    );
+    assert_eq!(finish_sign_in(&ep, tokens()).unwrap_err(), DOES_NOT_OWN);
     let (_, ep) = mock(|m| m.no_profile = true);
     assert!(finish_sign_in(&ep, tokens())
         .unwrap_err()
@@ -318,12 +595,8 @@ fn refusals_have_messages() {
         "Sign-in was declined in the browser."
     );
     // Nothing listening: a message, not a URL.
-    let dead = Endpoints {
-        microsoft: "http://127.0.0.1:9/ms".into(),
-        ..Endpoints::live()
-    };
     assert_eq!(
-        device_code(&dead, "x").unwrap_err(),
+        device_code(&offline(), "x").unwrap_err(),
         "Could not reach Microsoft. Check your internet connection."
     );
 }
@@ -353,6 +626,7 @@ fn accounts_keep_secrets_in_the_store_only() {
         minecraft_token: "mc-secret".into(),
         minecraft_expires_at: 1,
         xuid: None,
+        owns: true,
     };
     accounts.add(&store, account.clone(), &secrets).unwrap();
     assert_eq!(accounts.selected(), Some(&account));
@@ -416,6 +690,7 @@ fn session_files_are_private_and_complete() {
         minecraft_token: "mc-token".into(),
         minecraft_expires_at: 1,
         xuid: Some("25".into()),
+        owns: true,
     };
     let path = write_session_file(&dir, &account, &secrets).unwrap();
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -484,6 +759,10 @@ fn a_client_id_is_a_guid() {
 
 #[test]
 fn offline_names_switch_with_accounts() {
+    let store = MemoryStore::default();
+    store
+        .set("abc", &serde_json::to_string(&secrets("t", true)).unwrap())
+        .unwrap();
     let mut a = Accounts {
         accounts: vec![Account {
             uuid: "abc".into(),
@@ -510,9 +789,26 @@ fn offline_names_switch_with_accounts() {
     assert_eq!(a.name_arg(), None, "an account plays with its own name");
     assert!(a.play_as(Player::Microsoft("zzz".into())).is_err());
     a.play_as(Player::Offline("Builder_1".into())).unwrap();
-    a.remove_offline("BUILDER_1").unwrap();
+    // Forgetting drops the look and the name's skin and cape files too.
+    let dir = std::env::temp_dir().join(format!("horizon-accounts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (skin, cape) = crate::skins::files(&dir, "builder_1");
+    std::fs::write(&skin, b"skin").unwrap();
+    std::fs::write(&cape, b"cape").unwrap();
+    a.looks.insert(
+        "builder_1".into(),
+        crate::skins::Look {
+            skin: true,
+            cape: true,
+            ..crate::skins::Look::default()
+        },
+    );
+    a.remove_offline("BUILDER_1", &dir).unwrap();
     assert_eq!(a.player(), Player::GameName);
-    assert!(a.remove_offline("Builder_1").is_err());
+    assert!(a.looks.is_empty() && !skin.exists() && !cape.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(a.remove_offline("Builder_1", &dir).is_err());
     // An accounts.json from before offline names reads as it was, and writes nothing new.
     let old: Accounts = serde_json::from_str(r#"{"accounts":[],"selected":null}"#).unwrap();
     assert_eq!(old.player(), Player::GameName);
@@ -523,20 +819,26 @@ fn offline_names_switch_with_accounts() {
 }
 
 #[test]
-fn offline_play_needs_no_microsoft_account_or_requests() {
-    let (mock, ep) = mock(|_| {});
+fn the_java_edition_plays_as_an_owner_even_offline() {
+    let (_, ep) = mock(|_| {});
     let store = MemoryStore::default();
-    let mut accounts = Accounts::default();
-    assert!(session_for_launch(&ep, &store, &mut accounts)
-        .unwrap()
-        .is_none());
-    accounts.add_offline("Builder_1").unwrap();
-    accounts
-        .play_as(Player::Offline("Builder_1".into()))
-        .unwrap();
-    assert_eq!(accounts.name_arg(), Some("Builder_1"));
-    assert!(session_for_launch(&ep, &store, &mut accounts)
-        .unwrap()
-        .is_none());
-    assert!(mock.lock().unwrap().log.is_empty());
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let player = java_player_with(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    assert_eq!(
+        (
+            player.name.as_str(),
+            player.uuid.as_str(),
+            player.token.as_str()
+        ),
+        ("Notch", UUID, "mc-token")
+    );
+    // No network: the last token of an account that owned the game.
+    let player = java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap();
+    assert_eq!(player.token, "mc-token");
+    // Never for an account that doesn't own it.
+    let mut accounts = signed_in(&store, &secrets("mc-token", false));
+    assert_eq!(
+        java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
+        NoOwner.to_string()
+    );
 }
